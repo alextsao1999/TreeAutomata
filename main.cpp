@@ -7,7 +7,7 @@
 #include <cassert>
 #include <algorithm>
 #define INIT_COST 0
-#define MAX_COST 999
+#define MAX_COST 99999
 
 enum Opcode {
     None,
@@ -17,6 +17,23 @@ enum Opcode {
     Const,
     Reg,
 };
+
+std::string getOpName(Opcode op) {
+    switch (op) {
+        case None:
+            return "None";
+        case Add:
+            return "+";
+        case Sub:
+            return "-";
+        case Assign:
+            return "=";
+        case Const:
+            return "Int";
+        case Reg:
+            return "Reg";
+    }
+}
 
 int getOpArity(Opcode op) {
     switch (op) {
@@ -182,6 +199,9 @@ struct ItemSet {
     void deltaCost() {
         auto min = getMinCost();
         for (auto &[sym, tuple] : items) {
+            if (tuple.second == MAX_COST) {
+                continue;
+            }
             tuple.second = tuple.second - min;
         }
     }
@@ -240,7 +260,7 @@ struct ISelGenerator {
     std::map<Opcode, std::map<int, std::set<ItemSet>>> I;
 
     ISelGenerator() {
-        genRule3();
+        genRule();
         for (auto &rule: rules) {
             if (rule->op != None) {
                 OP.insert(rule->op);
@@ -250,23 +270,26 @@ struct ISelGenerator {
 
     void genRule() {
         // terminals
-        auto *cons = new Symbol(Const);
-        terminals = {cons};
+        auto *Cons_t = new Symbol(Const);
+        auto *Reg_t = new Symbol(Reg);
+        terminals = {Cons_t, Reg_t};
 
         // nonterminals
         auto *reg = new Symbol("reg");
-        auto *add = new Symbol("add");
+        auto *cons = new Symbol("int");
         auto *addr = new Symbol("addr");
-        auto *move = new Symbol("move");
+        auto *mov = new Symbol("mov");
+        nonterminals = {reg, cons, addr, mov};
 
-        nonterminals = {reg, add, addr, move};
-
+        rules.emplace_back(new Rule{reg, {Reg_t}, 1});
+        rules.emplace_back(new Rule{cons, {Cons_t}, 1});
         rules.emplace_back(new Rule{reg, {cons}, 1});
-        rules.emplace_back(new Rule{addr, {reg}, 0});
+        //rules.emplace_back(new Rule{reg, Sub, {reg, cons}, 2});
+        // rules.emplace_back(new Rule{reg, Sub, {reg, reg}, 2});
+        rules.emplace_back(new Rule{reg, Add, {reg, cons}, 2});
+        rules.emplace_back(new Rule{reg, Add, {reg, reg}, 2});
         rules.emplace_back(new Rule{addr, Add, {reg, cons}, 0});
-        rules.emplace_back(new Rule{add, Add, {reg, reg}, 1});
-        rules.emplace_back(new Rule{move, Assign, {addr, reg}, 1});
-        rules.emplace_back(new Rule{move, Assign, {reg, reg}, 1});
+        rules.emplace_back(new Rule{mov, Assign, {addr, reg}, 0});
 
     }
 
@@ -306,8 +329,6 @@ struct ISelGenerator {
         rules.emplace_back(new Rule{reg, {Reg_t}, 1});
         rules.emplace_back(new Rule{cons, {Cons_t}, 1});
         rules.emplace_back(new Rule{reg, {cons}, 1});
-        rules.emplace_back(new Rule{reg, Sub, {reg, cons}, 2});
-        rules.emplace_back(new Rule{reg, Sub, {reg, reg}, 2});
         rules.emplace_back(new Rule{reg, Add, {reg, cons}, 2});
         rules.emplace_back(new Rule{reg, Add, {reg, reg}, 2});
 
@@ -416,10 +437,11 @@ struct ISelGenerator {
     }
 
     void WorklistTransition(Opcode op, ItemSet &itemset) {
+        std::cout << "op -> " << getOpName(op) << std::endl;
         auto op_rules = getRules(op);
         for (int i = 0; i < getOpArity(op); ++i) {
             ItemSet repstate;
-            // 对当前所在的i在itemset进行投影, 取得所有可行的非终结符与规则, 得到表示集
+            // 对所有op中在第i维中的所有非终结符的规则在itemset(当前状态)上的投影, 取得所有可行的非终结符与推导规则, 得到表示集
             for (auto &n: nonterminals) {
                 for (auto &rule: child_rules(n, i)) {
                     if (op_rules.contains(rule) && itemset.contains(n)) {
@@ -429,20 +451,26 @@ struct ISelGenerator {
                 }
             }
 
+            std::cout << "i = " << i << std::endl;
+            std::cout << "reps:" << std::endl;
+            for (auto &ss: I[op][i]) {
+                std::cout << findState(op, i, ss) << " -> ";
+                ss.dump(std::cout);
+            }
+
+            if (repstate.items.empty()) {
+                continue;
+            }
+
             // 计算delta cost
             repstate.deltaCost();
 
             // 将表示集与项目集(当前状态)进行映射
             U[op][i][repstate] = itemset;
 
-            std::cout << "i = " << i << std::endl;
-            std::cout << "reps:" << std::endl;
-            for (auto &ss: I[op][i]) {
-                ss.dump(std::cout);
-            }
             // 如果在当前状态的表示集之前没有计算过, 就进行下一步
             if (!I[op][i].contains(repstate)) {
-                std::cout << "repstate:" << std::endl;
+                std::cout << "repstate on " << states_index[itemset] << " :" << std::endl;
                 repstate.dump(std::cout);
                 I[op][i].insert(repstate); // 将表示集加入到op的第i维中的集合, 防止重复计算
 
@@ -451,32 +479,32 @@ struct ISelGenerator {
                     if (i == j) {
                         compound[j] = {repstate};
                     } else {
-                        compound[j] = I[op][i];
+                        compound[j] = I[op][j];
                     }
                 }
                 auto tuples = product(compound);
-                // 对于特定的op, 计算在i维中, 表示集, 其他维则是op在j维中的所有情况的
 
                 for (auto &repset_tuple: tuples) {
                     ItemSet newitemset;
 
-                    /*if (repstate.items.size() == 0) {
-                        continue;
-                    }*/
-
+                    // 动态规划, 寻找op的所有规则中有最小开销的规则, 添加到新的项目集中
                     for (auto &rule: getRules(op)) {
                         int cost = rule->cost;
+                        bool exist = true;
                         for (int j = 0; j < rule->rhs.size(); ++j) {
                             if (j == i) {
+                                exist &= repstate.contains(rule->rhs[j]);
                                 cost += repstate.getCost(rule->rhs[j]);
                             } else {
+                                exist &= repset_tuple[j].contains(rule->rhs[j]);
                                 cost += repset_tuple[j].getCost(rule->rhs[j]);
                             }
                         }
-                        std::cout << "add rule ";
+                        std::cout << "adding rule ";
                         rule->dump(std::cout);
                         std::cout << ", " << cost << std::endl;
-                        newitemset.add(rule->getNonterminal(), rule, cost);
+                        if (exist)
+                            newitemset.add(rule->getNonterminal(), rule, cost);
                     }
                     newitemset.deltaCost();
 
@@ -495,45 +523,32 @@ struct ISelGenerator {
                         } while (changed);
                     }
 
-                    addState(newitemset);
+                    if (newitemset.items.empty()) {
+                        /*std::cout << "[newstate: " << states_index[newitemset] << "]" << std::endl;
+                        newitemset.dump(std::cout);*/
+                        continue;
+                    }
 
+                    addState(newitemset);
 
                     std::cout << "[newstate: " << states_index[newitemset] << "]" << std::endl;
                     newitemset.dump(std::cout);
 
-                    int idx = 0;
-                    switch (op) {
-                        case None:
-                            break;
-                        case Add:
-                            std::cout << "+";
-                            break;
-                        case Sub:
-                            std::cout << "-";
-                            break;
-                        case Assign:
-                            std::cout << "=";
-                            break;
-                        case Const:
-                            break;
-                        case Reg:
-                            break;
-                    }
+                    std::cout << getOpName(op);
                     std::cout << "(";
                     std::vector<int> transition;
+                    int j = 0;
                     for (auto &t: repset_tuple) {
-                        transition.push_back(findState(op, i, t));
-                        auto f = findState(op, i, t);
+                        auto f = findState(op, j++, t);
+                        transition.push_back(f);
                         std::cout << f << " ";
                     }
                     theta[op][transition] = states_index[newitemset];
                     std::cout << ")" << " -> " << states_index[newitemset] << std::endl;
-                    std::cout << std::endl;
 
                 }
+                std::cout << std::endl;
             }
-            //repstate.deltaCost();
-
 
         }
     }
@@ -543,6 +558,9 @@ struct ISelGenerator {
         if (states_index.contains(st)) {
             return states_index[st];
         }
+        std::cout << std::endl;
+        std::cout << "error -> " << std::endl;
+        itemset.dump(std::cout);
         return -1;
     }
 
@@ -551,6 +569,9 @@ struct ISelGenerator {
             states_index[itemset] = ++index;
         }
         //worklist.insert(worklist.begin(), itemset);
+        if (worklist.size() > 0 && worklist.back().items == itemset.items) {
+            return;
+        }
         worklist.push_back(itemset);
     }
 
@@ -570,7 +591,6 @@ struct ISelGenerator {
         }
 
     }
-
 
 };
 
@@ -645,10 +665,10 @@ int main() {
     std::cout << std::endl << std::endl;
 
     std::vector<TreeNode *> nodes = {
-            new TreeNode(Add, {new TreeNode(Sub, {new TreeNode(Reg), new TreeNode(Const)}), new TreeNode(Reg)}),
+            new TreeNode(Assign, {new TreeNode(Add, {new TreeNode(Reg), new TreeNode(Const)}), new TreeNode(Reg)}),
+            new TreeNode(Add, {new TreeNode(Add, {new TreeNode(Reg), new TreeNode(Const)}), new TreeNode(Reg)}),
             new TreeNode(Add, {new TreeNode(Reg), new TreeNode(Reg)}),
             new TreeNode(Add, {new TreeNode(Reg), new TreeNode(Const)}),
-            new TreeNode(Add, {new TreeNode(Const), new TreeNode(Const)})
     };
 
     for (auto &node: nodes) {
