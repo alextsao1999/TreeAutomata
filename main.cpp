@@ -150,7 +150,6 @@ struct Rule {
 };
 
 struct ItemSet {
-    std::map<Rule *, int> rules;
     std::map<Symbol *, std::pair<Rule *, int>> items;
 
     Rule *getRule(Symbol *sym) {
@@ -187,10 +186,6 @@ struct ItemSet {
         }
     }
 
-    bool add(Rule *rule, int cost) {
-        return rules.insert({rule, cost}).second;
-    }
-
     bool add(Symbol *sym, Rule *rule, int cost) {
         if (items.contains(sym)) {
 
@@ -207,7 +202,7 @@ struct ItemSet {
         return items < rhs.items;
     }
 
-    void dump(std::ostream &os) {
+    void dump(std::ostream &os) const {
         std::cout << "{" << std::endl;
         for (auto &[sym, tuple]: items) {
             auto &[rule, cost] = tuple;
@@ -225,12 +220,6 @@ struct ItemSet {
         //os << std::string(10, '-') << std::endl;
 
     }
-};
-
-struct OpMap {
-    std::map<int, std::map<ItemSet, ItemSet>> map;
-    std::map<int, std::set<ItemSet>> reps;
-
 };
 
 using TransMap = std::map<Opcode, std::map<std::vector<int>, int>>;
@@ -344,6 +333,38 @@ struct ISelGenerator {
         return res;
     }
 
+    std::set<std::vector<ItemSet>> product(std::vector<std::set<ItemSet>> &tuple) {
+        std::set<std::vector<ItemSet>> res;
+        for (int i = 0; i < tuple.size(); ++i) {
+            if (i == 0) {
+                res = convert(tuple[i]);
+            } else {
+                res = product_two(res, convert(tuple[i]));
+            }
+        }
+        return res;
+    }
+
+    std::set<std::vector<ItemSet>> convert(std::set<ItemSet> &s1) {
+        std::set<std::vector<ItemSet>> res;
+        for (auto &s: s1) {
+            res.insert({s});
+        }
+        return res;
+    }
+
+    std::set<std::vector<ItemSet>> product_two(const std::set<std::vector<ItemSet>> &s1, const std::set<std::vector<ItemSet>> &s2) {
+        std::set<std::vector<ItemSet>> res;
+        for (auto &ss1: s1) {
+            for (auto &ss2: s2) {
+                auto item = ss1;
+                item.insert(item.end(), ss2.begin(), ss2.end());
+                res.insert(item);
+            }
+        }
+        return res;
+    }
+
     auto child_rules(Symbol *sym, int i) {
         std::set<Rule *> res;
         for (auto &rule : rules) {
@@ -398,7 +419,7 @@ struct ISelGenerator {
         auto op_rules = getRules(op);
         for (int i = 0; i < getOpArity(op); ++i) {
             ItemSet repstate;
-            // 对当前所在的i在itemset进行投影, 取得所有可行的非终结符
+            // 对当前所在的i在itemset进行投影, 取得所有可行的非终结符与规则, 得到表示集
             for (auto &n: nonterminals) {
                 for (auto &rule: child_rules(n, i)) {
                     if (op_rules.contains(rule) && itemset.contains(n)) {
@@ -410,13 +431,20 @@ struct ISelGenerator {
 
             // 计算delta cost
             repstate.deltaCost();
+
+            // 将表示集与项目集(当前状态)进行映射
             U[op][i][repstate] = itemset;
 
             std::cout << "i = " << i << std::endl;
+            std::cout << "reps:" << std::endl;
+            for (auto &ss: I[op][i]) {
+                ss.dump(std::cout);
+            }
+            // 如果在当前状态的表示集之前没有计算过, 就进行下一步
             if (!I[op][i].contains(repstate)) {
                 std::cout << "repstate:" << std::endl;
                 repstate.dump(std::cout);
-                I[op][i].insert(repstate);
+                I[op][i].insert(repstate); // 将表示集加入到op的第i维中的集合, 防止重复计算
 
                 std::vector<std::set<ItemSet>> compound(getOpArity(op));
                 for (int j = 0; j < getOpArity(op); ++j) {
@@ -427,6 +455,8 @@ struct ISelGenerator {
                     }
                 }
                 auto tuples = product(compound);
+                // 对于特定的op, 计算在i维中, 表示集, 其他维则是op在j维中的所有情况的
+
                 for (auto &repset_tuple: tuples) {
                     ItemSet newitemset;
 
@@ -443,6 +473,9 @@ struct ISelGenerator {
                                 cost += repset_tuple[j].getCost(rule->rhs[j]);
                             }
                         }
+                        std::cout << "add rule ";
+                        rule->dump(std::cout);
+                        std::cout << ", " << cost << std::endl;
                         newitemset.add(rule->getNonterminal(), rule, cost);
                     }
                     newitemset.deltaCost();
@@ -519,38 +552,6 @@ struct ISelGenerator {
         }
         //worklist.insert(worklist.begin(), itemset);
         worklist.push_back(itemset);
-    }
-
-    std::set<std::vector<ItemSet>> product(std::vector<std::set<ItemSet>> &tuple) {
-        std::set<std::vector<ItemSet>> res;
-        for (int i = 0; i < tuple.size(); ++i) {
-            if (i == 0) {
-                res = convert(tuple[i]);
-            } else {
-                res = product_two(res, convert(tuple[i]));
-            }
-        }
-        return res;
-    }
-
-    std::set<std::vector<ItemSet>> convert(std::set<ItemSet> &s1) {
-        std::set<std::vector<ItemSet>> res;
-        for (auto &s: s1) {
-            res.insert({s});
-        }
-        return res;
-    }
-
-    std::set<std::vector<ItemSet>> product_two(const std::set<std::vector<ItemSet>> &s1, const std::set<std::vector<ItemSet>> &s2) {
-        std::set<std::vector<ItemSet>> res;
-        for (auto &ss1: s1) {
-            for (auto &ss2: s2) {
-                auto item = ss1;
-                item.insert(item.end(), ss2.begin(), ss2.end());
-                res.insert(item);
-            }
-        }
-        return res;
     }
 
     void WorklistMain() {
@@ -641,12 +642,22 @@ void automata_label(ISelGenerator &gen, TreeNode *node) {
 int main() {
     ISelGenerator gen;
     gen.WorklistMain();
+    std::cout << std::endl << std::endl;
 
-    auto *node = new TreeNode(Add, {new TreeNode(Sub, {new TreeNode(Reg), new TreeNode(Const)}), new TreeNode(Reg)});
+    std::vector<TreeNode *> nodes = {
+            new TreeNode(Add, {new TreeNode(Sub, {new TreeNode(Reg), new TreeNode(Const)}), new TreeNode(Reg)}),
+            new TreeNode(Add, {new TreeNode(Reg), new TreeNode(Reg)}),
+            new TreeNode(Add, {new TreeNode(Reg), new TreeNode(Const)}),
+            new TreeNode(Add, {new TreeNode(Const), new TreeNode(Const)})
+    };
 
-    automata_label(gen, node);
+    for (auto &node: nodes) {
+        automata_label(gen, node);
+    }
 
-    node->dump(std::cout);
+    for (auto &node: nodes) {
+        node->dump(std::cout);
+    }
 
     return 0;
 }
