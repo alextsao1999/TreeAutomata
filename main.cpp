@@ -52,6 +52,20 @@ struct Symbol {
         return isNT;
     }
 
+    void dump(std::ostream &os) {
+        switch (opcode) {
+            case None:
+                os << name;
+                break;
+            case Const:
+                os << "Int";
+                break;
+            case Reg:
+                os << "Reg";
+                break;
+        }
+    }
+
 };
 
 struct Rule {
@@ -88,6 +102,49 @@ struct Rule {
 
     Symbol *getNonterminal() const {
         return lhs;
+    }
+
+    void dump(std::ostream &os) {
+        lhs->dump(os);
+        os << " -> ";
+        bool close = false;
+        switch (op) {
+            case None:
+                break;
+            case Add:
+                close = true;
+                os << "+";
+                break;
+            case Sub:
+                close = true;
+                os << "-";
+                break;
+            case Assign:
+                os << "=";
+                close = true;
+                break;
+            case Const:
+                break;
+            case Reg:
+                break;
+        }
+
+
+        if (close) {
+            os << "(";
+        }
+
+        int i = 0;
+        for (auto &item: rhs) {
+            if (i++ != 0) {
+                os << ", ";
+            }
+            item->dump(os);
+        }
+
+        if (close) {
+            os << ")";
+        }
     }
 
 };
@@ -149,6 +206,25 @@ struct ItemSet {
     bool operator<(const ItemSet &rhs) const {
         return items < rhs.items;
     }
+
+    void dump(std::ostream &os) {
+        std::cout << "{" << std::endl;
+        for (auto &[sym, tuple]: items) {
+            auto &[rule, cost] = tuple;
+            sym->dump(os);
+            os << "\t| ";
+            if (rule) {
+                rule->dump(os);
+            } else {
+                os << "(null)";
+            }
+            os << ", " << cost << std::endl;
+        }
+        std::cout << "}" << std::endl;
+
+        //os << std::string(10, '-') << std::endl;
+
+    }
 };
 
 struct OpMap {
@@ -172,7 +248,7 @@ struct ISelGenerator {
     std::map<Opcode, std::map<int, std::set<ItemSet>>> I;
 
     ISelGenerator() {
-        genRule2();
+        genRule3();
         for (auto &rule: rules) {
             if (rule->op != None) {
                 OP.insert(rule->op);
@@ -669,28 +745,13 @@ struct ISelGenerator {
                 }
             } while (changed);
 
-            //worklist.push_back(itemset);
             addState(itemset);
 
-            switch (a->opcode) {
-                case Const:
-                    std::cout << "int state -> ";
-                    break;
-                case Reg:
-                    std::cout << "reg state -> ";
-                    break;
-                case None:
-                    break;
-                case Add:
-                    break;
-                case Sub:
-                    break;
-                case Assign:
-                    break;
-            }
+            std::cout << "[newstate: " << states_index[itemset] << "] -> " ;
+            a->dump(std::cout);
+            std::cout << std::endl;
 
-            std::cout << states_index[itemset] << std::endl;
-
+            itemset.dump(std::cout);
         }
     }
 
@@ -698,26 +759,35 @@ struct ISelGenerator {
         auto op_rules = getRules(op);
         for (int i = 0; i < getOpArity(op); ++i) {
             ItemSet repstate;
+            // 对当前所在的i在itemset进行投影, 取得所有可行的非终结符
             for (auto &n: nonterminals) {
                 for (auto &rule: child_rules(n, i)) {
                     if (op_rules.contains(rule) && itemset.contains(n)) {
-                        repstate.add(n, rule, itemset.getCost(n));
+                        //repstate.add(n, rule, itemset.getCost(n));
+                        repstate.add(n, itemset.items[n].first, itemset.getCost(n));
                     }
                 }
             }
 
+            // 计算delta cost
             repstate.deltaCost();
             //U[op][i][itemset] = repstate;
             U[op][i][repstate] = itemset;
 
-            if (!I[op][i].contains(repstate)) {
+            std::cout << "i = " << i << std::endl;
+            if (!I[op][i].contains(repstate) /*|| true*/) {
+                std::cout << "repstate:" << std::endl;
+                repstate.dump(std::cout);
                 I[op][i].insert(repstate);
 
                 std::vector<std::set<ItemSet>> compound(getOpArity(op));
                 for (int j = 0; j < getOpArity(op); ++j) {
-                    compound[j] = I[op][i];
+                    if (i == j) {
+                        compound[j] = {repstate};
+                    } else {
+                        compound[j] = I[op][i];
+                    }
                 }
-                compound[i] = {repstate};
                 auto tuples = calcProduct(compound);
                 for (auto &repset_tuple: tuples) {
                     ItemSet newitemset;
@@ -740,7 +810,7 @@ struct ISelGenerator {
                         do {
                             changed = false;
                             for (auto &rule: getRules(op)) {
-                                if (newitemset.items.contains(rule->getArityZeroRHS())){
+                                if (newitemset.items.contains(rule->getArityZeroRHS())) {
                                     int cost = rule->cost + newitemset.getCost(rule->getArityZeroRHS());
                                     if (newitemset.add(rule->getNonterminal(), rule, cost)) {
                                         changed = true;
@@ -751,6 +821,10 @@ struct ISelGenerator {
                     }
 
                     addState(newitemset);
+
+
+                    std::cout << "[newstate: " << states_index[newitemset] << "]" << std::endl;
+                    newitemset.dump(std::cout);
 
                     int idx = 0;
                     std::cout << "+(";
@@ -781,7 +855,8 @@ struct ISelGenerator {
         if (states.insert(itemset).second) {
             states_index[itemset] = ++index;
         }
-        worklist.insert(worklist.begin(), itemset);
+        //worklist.insert(worklist.begin(), itemset);
+        worklist.push_back(itemset);
     }
 
     std::set<std::vector<ItemSet>> calcProduct(std::vector<std::set<ItemSet>> &tuple) {
@@ -824,7 +899,7 @@ struct ISelGenerator {
             ItemSet itemset = worklist.back();
             worklist.pop_back();
             auto aa = states_index[itemset];
-            std::cout << "entering: " << aa << std::endl;
+            std::cout << std::string(25, '-') << " [entering: " << aa << "] " << std::string(25, '-') << std::endl;
 
             for (auto &op: OP) {
                 WorklistTransition(op, itemset);
