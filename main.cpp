@@ -250,8 +250,8 @@ struct ISelGenerator {
     std::vector<Symbol *> nonterminals;
     std::vector<std::unique_ptr<Rule>> rules;
     std::vector<ItemSet> worklist;
-    std::set<ItemSet> states;
-    std::map<ItemSet, int> states_index;
+    //std::set<ItemSet> states;
+    std::map<ItemSet, int> states;
     int index = 0;
     std::set<Opcode> OP;
     TransMap theta;
@@ -427,8 +427,8 @@ struct ISelGenerator {
 
             addState(itemset);
 
-            tau[a->opcode] = states_index[itemset];
-            std::cout << "[newstate: " << states_index[itemset] << "] -> " ;
+            tau[a->opcode] = states[itemset];
+            std::cout << "[newstate: " << states[itemset] << "] -> " ;
             a->dump(std::cout);
             std::cout << std::endl;
 
@@ -470,7 +470,7 @@ struct ISelGenerator {
 
             // 如果在当前状态的表示集之前没有计算过, 就进行下一步
             if (!I[op][i].contains(repstate)) {
-                std::cout << "repstate on " << states_index[itemset] << " :" << std::endl;
+                std::cout << "repstate on " << states[itemset] << " :" << std::endl;
                 repstate.dump(std::cout);
                 I[op][i].insert(repstate); // 将表示集加入到op的第i维中的集合, 防止重复计算
 
@@ -508,12 +508,12 @@ struct ISelGenerator {
                     }
                     newitemset.deltaCost();
 
-                    if (!states.contains(newitemset)) {
+                    if (!hasState(newitemset)) {
                         bool changed;
                         do {
                             changed = false;
                             for (auto &rule: getRules(op)) {
-                                if (newitemset.items.contains(rule->getArityZeroRHS())) {
+                                if (newitemset.contains(rule->getArityZeroRHS())) {
                                     int cost = rule->cost + newitemset.getCost(rule->getArityZeroRHS());
                                     if (newitemset.add(rule->getNonterminal(), rule, cost)) {
                                         changed = true;
@@ -531,7 +531,7 @@ struct ISelGenerator {
 
                     addState(newitemset);
 
-                    std::cout << "[newstate: " << states_index[newitemset] << "]" << std::endl;
+                    std::cout << "[newstate: " << states[newitemset] << "]" << std::endl;
                     newitemset.dump(std::cout);
 
                     std::cout << getOpName(op);
@@ -543,8 +543,8 @@ struct ISelGenerator {
                         transition.push_back(f);
                         std::cout << f << " ";
                     }
-                    theta[op][transition] = states_index[newitemset];
-                    std::cout << ")" << " -> " << states_index[newitemset] << std::endl;
+                    theta[op][transition] = states[newitemset];
+                    std::cout << ")" << " -> " << states[newitemset] << std::endl;
 
                 }
                 std::cout << std::endl;
@@ -555,20 +555,21 @@ struct ISelGenerator {
 
     int findState(Opcode op, int i, const ItemSet &itemset) {
         auto st = U[op][i][itemset];
-        if (states_index.contains(st)) {
-            return states_index[st];
+        if (states.contains(st)) {
+            return states[st];
         }
-        std::cout << std::endl;
-        std::cout << "error -> " << std::endl;
-        itemset.dump(std::cout);
+        assert(!"not reachable");
         return -1;
     }
 
+    bool hasState(const ItemSet &itemset) {
+        return states.contains(itemset);
+    }
+
     void addState(const ItemSet &itemset) {
-        if (states.insert(itemset).second) {
-            states_index[itemset] = ++index;
+        if (!states.contains(itemset)) {
+            states[itemset] = ++index;
         }
-        //worklist.insert(worklist.begin(), itemset);
         if (worklist.size() > 0 && worklist.back().items == itemset.items) {
             return;
         }
@@ -582,7 +583,7 @@ struct ISelGenerator {
         while (!worklist.empty()) {
             ItemSet itemset = worklist.back();
             worklist.pop_back();
-            auto aa = states_index[itemset];
+            auto aa = states[itemset];
             std::cout << std::string(25, '-') << " [entering: " << aa << "] " << std::string(25, '-') << std::endl;
 
             for (auto &op: OP) {
@@ -663,6 +664,13 @@ int main() {
     ISelGenerator gen;
     gen.WorklistMain();
     std::cout << std::endl << std::endl;
+
+    std::cout << "=======================================" << std::endl;
+    for (auto &[itemset, id]: gen.states) {
+        std::cout << id << " -> ";
+        itemset.dump(std::cout);
+    }
+    std::cout << std::endl;
 
     std::vector<TreeNode *> nodes = {
             new TreeNode(Assign, {new TreeNode(Add, {new TreeNode(Reg), new TreeNode(Const)}), new TreeNode(Reg)}),
