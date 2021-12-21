@@ -344,81 +344,6 @@ struct ISelGenerator {
         return res;
     }
 
-    std::set<Symbol *> nt(const std::set<Rule *> &rs) {
-        std::set<Symbol *> res;
-        for (auto &rule: rs) {
-            res.insert(rule->getNonterminal());
-        }
-        return res;
-    }
-
-    int getMinCost(const std::set<Rule *> &rs) {
-        int min = MAX_COST;
-        for (auto *rule : rs) {
-            if (rule->cost < min) {
-                min = rule->cost;
-            }
-        }
-        return min;
-    }
-
-    std::set<Rule *> getChainRules(Symbol *sym) {
-        std::set<Rule *> res;
-        for (auto &rule : rules) {
-            if (rule->getArityZeroRHS() == sym) {
-                res.insert(rule.get());
-            }
-        }
-        return getChainRules(res);
-    }
-
-    std::set<Rule *> getChainRules(const std::set<Symbol *> &syms) {
-        std::set<Rule *> res;
-        for (auto &rule : rules) {
-            if (syms.contains(rule->getArityZeroRHS())) {
-                res.insert(rule.get());
-            }
-        }
-        return getChainRules(res);
-    }
-
-    std::set<Rule *> getChainRules(std::set<Rule *> res) {
-        bool changed;
-        do {
-            changed = false;
-            for (auto &rule : rules) {
-                for (auto &n: res) {
-                    if (n->getNonterminal() == rule->getArityZeroRHS()) {
-                        if (res.insert(rule.get()).second) {
-                            changed = true;
-                        }
-                    }
-                    /*for (auto &arg: rule->rhs) {
-                        if (n->getNonterminal() == arg) {
-                            if (res.insert(rule.get()).second) {
-                                changed = true;
-                            }
-                        }
-                    }*/
-
-                }
-            }
-        } while (changed);
-        return res;
-    }
-
-    auto child_NT(Opcode op, int i) {
-        std::set<Symbol *> res;
-        for (auto &rule: rules) {
-            if (rule->op == op) {
-                if (rule->rhs.size() > i) {
-                    res.insert(rule->rhs[i]);
-                }
-            }
-        }
-        return res;
-    }
-
     auto child_rules(Symbol *sym, int i) {
         std::set<Rule *> res;
         for (auto &rule : rules) {
@@ -429,297 +354,6 @@ struct ISelGenerator {
             }
         }
         return res;
-    }
-
-    std::map<Rule *, int> delta;
-    std::map<Symbol *, int> diff;
-    std::map<Opcode, std::map<int, std::map<Symbol *, int>>> indexMap;
-
-    void IterativeArityZeroTables() {
-        for (auto &a: terminals) {
-            ItemSet itemset;
-
-            auto mrules = getRules(a);
-            auto mnonterminals = nt(mrules);
-            auto chain_rules = getChainRules(a);
-            auto match_rules = mrules;
-            match_rules.insert(chain_rules.begin(), chain_rules.end());
-            auto match_NT = nt(match_rules);
-            // initialize cost
-            for (auto *rule: match_rules) {
-                delta[rule] = MAX_COST;
-            }
-            for (auto *nt: match_NT) {
-                diff[nt] = MAX_COST;
-            }
-
-            // begin
-            auto cost_min = getMinCost(mrules);
-            for (auto *rule: mrules) {
-                delta[rule] = rule->cost - cost_min;
-            }
-
-            for (auto *sym: mnonterminals) {
-                auto min_cost = MAX_COST;
-                for (auto *rule: sym->rules) {
-                    if (delta.contains(rule)) {
-                        if (delta[rule] < min_cost) {
-                            min_cost = delta[rule];
-                        }
-                    }
-                }
-                diff[sym] = min_cost;
-            }
-
-            bool changed;
-            do {
-                changed = false;
-                for (auto *rule: chain_rules) {
-                    assert(rule->getArityZeroRHS());
-                    auto &oldDn = diff[rule->getNonterminal()];
-                    auto newDn = diff[rule->getArityZeroRHS()] + rule->cost;
-                    if (newDn < oldDn) {
-                        oldDn = newDn;
-                        changed = true;
-                    }
-
-                    auto &oldDelta = delta[rule];
-                    if (newDn < oldDelta) {
-                        oldDelta = newDn;
-                        changed = true;
-                    }
-                }
-            } while (changed);
-
-            for (auto *rule: match_rules) {
-                itemset.add(rule, delta[rule]);
-            }
-            // stmt = 1, addr = 2, reg = 3, and con = 4
-            states.insert(itemset);
-
-        }
-    }
-
-    bool IterativeTransition(Opcode op, int i) {
-        RepTy product = repset_product(op, i);
-        RepTy sub = repset_sub(product, repset_product(op, i - 1));
-
-        for (auto &tuple: sub) {
-            ItemSet itemset;
-            std::set<Rule *> mrules;
-            std::map<Rule *, int> Crhs;
-            std::map<Rule *, int> COST;
-            for (auto &rule: rules) {
-                if (op == rule->op && rule->getArity() == tuple.size()) {
-                    int v = 0;
-                    bool match = true;
-                    int cRhsNT = 0;
-                    for (auto &sym: tuple) {
-                        if (sym != rule->rhs[v++]) {
-                            match = false;
-                            break;
-                        }
-                        cRhsNT += diff[sym];
-                    }
-                    if (match) {
-                        mrules.insert(rule.get());
-                        Crhs[rule.get()] = cRhsNT;
-                    }
-                }
-            }
-
-            auto mnonterminals = nt(mrules);
-            auto chain_rules = getChainRules(mrules);
-            auto match_rules = mrules;
-            match_rules.insert(chain_rules.begin(), chain_rules.end());
-            auto match_NT = nt(match_rules);
-            // initialize cost
-            for (auto *rule: match_rules) {
-                delta[rule] = MAX_COST;
-            }
-            for (auto *nt: match_NT) {
-                diff[nt] = MAX_COST;
-            }
-
-            for (auto *rule: mrules) {
-                COST[rule] = Crhs[rule] + rule->cost;
-            }
-            int COST_Min = MAX_COST;
-            for (auto *rule: mrules) {
-                if (COST[rule] < COST_Min) {
-                    COST_Min = COST[rule];
-                }
-            }
-            for (auto *rule: mrules) {
-                delta[rule] = COST[rule] - COST_Min;
-            }
-
-            auto getMinDeltaCost = [&](Symbol *nt) -> int {
-                auto min_cost = MAX_COST;
-                for (auto *rule: nt->rules) {
-                    if (delta[rule] < min_cost) {
-                        min_cost = delta[rule];
-                    }
-                }
-                return min_cost;
-            };
-
-            for (auto n: mnonterminals) {
-                diff[n] = getMinDeltaCost(n);
-            }
-
-            bool changed;
-            do {
-                changed = false;
-                for (auto *rule: getChainRules(match_NT)) {
-                    assert(rule->getArityZeroRHS());
-                    auto &oldDn = diff[rule->getNonterminal()];
-                    auto newDn = diff[rule->getArityZeroRHS()] + rule->cost;
-                    if (newDn < oldDn) {
-                        oldDn = newDn;
-                        changed = true;
-                    }
-
-                    auto &oldDelta = delta[rule];
-                    if (newDn < oldDelta) {
-                        oldDelta = newDn;
-                        changed = true;
-                    }
-                }
-            } while (changed);
-
-            auto getMinCostRule = [&](Symbol *nt) -> Rule * {
-                Rule *min_rule = nullptr;
-                auto min_cost = MAX_COST;
-                for (auto *rule: nt->rules) {
-                    if (match_rules.contains(rule) && delta[rule] < min_cost) {
-                        min_cost = delta[rule];
-                        min_rule = rule;
-                    }
-                }
-                return min_rule;
-            };
-
-            for (auto *rule: match_rules) {
-                //rule->getNonterminal()->rules
-                auto *will = getMinCostRule(rule->getNonterminal());
-                itemset.add(will, delta[will]);
-            }
-
-            int idx = 0;
-            std::cout << "OP(";
-            for (auto &item: tuple) {
-                std::cout << indexMap[op][idx++][item] << " ";
-            }
-            std::cout << ")" << " -> " << states.size() << std::endl;
-
-            states.insert(itemset);
-        }
-
-        return false;
-
-    }
-
-    using RepTy = std::set<std::vector<Symbol *>>;
-
-    RepTy repset_product(Opcode op, int i) {
-        RepTy product;
-        if (i < 0) {
-            return {};
-        }
-        for (int j = 0; j < getOpArity(op); ++j) {
-            if (j == 0) {
-                product = repset(op, j, i);
-            } else {
-                product = repset_product(product, repset(op, j, i));
-            }
-        }
-        return product;
-    }
-
-    RepTy repset(Opcode op, int j, int i) {
-        RepTy res;
-        if (i < 0) {
-            return {};
-        }
-        auto nts = child_NT(op, j);
-        //auto &state = states[i];
-        auto &state = *states.begin();
-        for (auto *nt: nts) {
-            for (auto &[rule, cost]: state.rules) {
-                if (nt == rule->getNonterminal()) {
-                    res.insert({nt});
-                }
-            }
-        }
-        return res;
-    }
-
-    RepTy repset_product(const RepTy &p1, const RepTy &p2) {
-        RepTy res;
-        for (auto &item1: p1) {
-            for (auto &item2 : p2) {
-                auto item = item1;
-                item.insert(item.end(), item2.begin(), item2.end());
-                res.insert(item);
-            }
-        }
-        return res;
-    }
-
-    RepTy repset_sub(const RepTy &p1, const RepTy &p2) {
-        RepTy res;
-        for (auto &item: p1) {
-            if (!p2.contains(item)) {
-                res.insert(item);
-            }
-        }
-        return res;
-    }
-
-    void updateIndexMap(int i) {
-        if (i >= states.size()) {
-            return;
-        }
-        for (auto op: OP) {
-            for (int j = 0; j < getOpArity(op); ++j) {
-                auto rep = repset(op, j, i);
-                for (auto &tuple: rep) {
-                    if (!indexMap[op][j].contains(tuple.front())) {
-
-                        indexMap[op][j][tuple.front()] = i;
-                    }
-                }
-            }
-        }
-    }
-
-    void IterativeMain() {
-        IterativeArityZeroTables();
-        int i = 0;
-        updateIndexMap(i);
-        do {
-            for (auto op: OP) {
-                IterativeTransition(op, i);
-            }
-            i++;
-            updateIndexMap(i);
-        } while (isContinue(i));
-    }
-
-    bool isContinue(int i) {
-        if (i >= states.size()) {
-            return false;
-        }
-        bool changed = false;
-        for (auto op: OP) {
-            for (int j = 0; j < getOpArity(op); ++j) {
-                if (repset(op, j, i) != repset(op, j, i - 1)) {
-                    changed = true;
-                }
-            }
-        }
-        return changed;
     }
 
     void WorklistArityZeroTables() {
@@ -792,7 +426,7 @@ struct ISelGenerator {
                         compound[j] = I[op][i];
                     }
                 }
-                auto tuples = calcProduct(compound);
+                auto tuples = product(compound);
                 for (auto &repset_tuple: tuples) {
                     ItemSet newitemset;
 
@@ -887,19 +521,19 @@ struct ISelGenerator {
         worklist.push_back(itemset);
     }
 
-    std::set<std::vector<ItemSet>> calcProduct(std::vector<std::set<ItemSet>> &tuple) {
+    std::set<std::vector<ItemSet>> product(std::vector<std::set<ItemSet>> &tuple) {
         std::set<std::vector<ItemSet>> res;
         for (int i = 0; i < tuple.size(); ++i) {
             if (i == 0) {
-                res = trans(tuple[i]);
+                res = convert(tuple[i]);
             } else {
-                res = calcTwo(res, trans(tuple[i]));
+                res = product_two(res, convert(tuple[i]));
             }
         }
         return res;
     }
 
-    std::set<std::vector<ItemSet>> trans(std::set<ItemSet> &s1) {
+    std::set<std::vector<ItemSet>> convert(std::set<ItemSet> &s1) {
         std::set<std::vector<ItemSet>> res;
         for (auto &s: s1) {
             res.insert({s});
@@ -907,7 +541,7 @@ struct ISelGenerator {
         return res;
     }
 
-    std::set<std::vector<ItemSet>> calcTwo(const std::set<std::vector<ItemSet>> &s1, const std::set<std::vector<ItemSet>> &s2) {
+    std::set<std::vector<ItemSet>> product_two(const std::set<std::vector<ItemSet>> &s1, const std::set<std::vector<ItemSet>> &s2) {
         std::set<std::vector<ItemSet>> res;
         for (auto &ss1: s1) {
             for (auto &ss2: s2) {
@@ -989,19 +623,18 @@ struct TreeNode {
 
 };
 
-void automata_label(TransMap &theta, TransSym &tau, TreeNode *node) {
+void automata_label(ISelGenerator &gen, TreeNode *node) {
     if (node->members.size()) {
         std::vector<int> tran;
         for (auto &mem: node->members) {
-            automata_label(theta, tau, mem);
+            automata_label(gen, mem);
             tran.push_back(mem->label);
         }
-        node->label = theta[node->op][tran];
+        node->label = gen.theta[node->op][tran];
 
     } else {
-        node->label = tau[node->op];
+        node->label = gen.tau[node->op];
     }
-
 
 }
 
@@ -1011,11 +644,9 @@ int main() {
 
     auto *node = new TreeNode(Add, {new TreeNode(Sub, {new TreeNode(Reg), new TreeNode(Const)}), new TreeNode(Reg)});
 
-    automata_label(gen.theta, gen.tau, node);
+    automata_label(gen, node);
 
     node->dump(std::cout);
-    //gen.IterativeMain();
-
 
     return 0;
 }
