@@ -233,6 +233,9 @@ struct OpMap {
 
 };
 
+using TransMap = std::map<Opcode, std::map<std::vector<int>, int>>;
+using TransSym = std::map<Opcode, int>;
+
 struct ISelGenerator {
     std::vector<Symbol *> terminals;
     std::vector<Symbol *> nonterminals;
@@ -242,8 +245,8 @@ struct ISelGenerator {
     std::map<ItemSet, int> states_index;
     int index = 0;
     std::set<Opcode> OP;
-    std::map<Symbol *, int> tau;
-    std::map<Opcode, OpMap> map;
+    TransMap theta;
+    TransSym tau;
     std::map<Opcode, std::map<int, std::map<ItemSet, ItemSet>>> U;
     std::map<Opcode, std::map<int, std::set<ItemSet>>> I;
 
@@ -286,11 +289,10 @@ struct ISelGenerator {
         // nonterminals
         auto *con = new Symbol("con");
         auto *reg = new Symbol("reg");
-        auto *add = new Symbol("add");
         auto *addr = new Symbol("addr");
         auto *stmt = new Symbol("stmt");
 
-        nonterminals = {reg, add, addr, stmt};
+        nonterminals = {con, reg, addr, stmt};
 
         rules.emplace_back(new Rule{con, {cons}, 0});
         rules.emplace_back(new Rule{reg, {con}, 1});
@@ -315,6 +317,8 @@ struct ISelGenerator {
         rules.emplace_back(new Rule{reg, {Reg_t}, 1});
         rules.emplace_back(new Rule{cons, {Cons_t}, 1});
         rules.emplace_back(new Rule{reg, {cons}, 1});
+        rules.emplace_back(new Rule{reg, Sub, {reg, cons}, 2});
+        rules.emplace_back(new Rule{reg, Sub, {reg, reg}, 2});
         rules.emplace_back(new Rule{reg, Add, {reg, cons}, 2});
         rules.emplace_back(new Rule{reg, Add, {reg, reg}, 2});
 
@@ -747,6 +751,7 @@ struct ISelGenerator {
 
             addState(itemset);
 
+            tau[a->opcode] = states_index[itemset];
             std::cout << "[newstate: " << states_index[itemset] << "] -> " ;
             a->dump(std::cout);
             std::cout << std::endl;
@@ -771,11 +776,10 @@ struct ISelGenerator {
 
             // ¼ÆËãdelta cost
             repstate.deltaCost();
-            //U[op][i][itemset] = repstate;
             U[op][i][repstate] = itemset;
 
             std::cout << "i = " << i << std::endl;
-            if (!I[op][i].contains(repstate) /*|| true*/) {
+            if (!I[op][i].contains(repstate)) {
                 std::cout << "repstate:" << std::endl;
                 repstate.dump(std::cout);
                 I[op][i].insert(repstate);
@@ -791,6 +795,10 @@ struct ISelGenerator {
                 auto tuples = calcProduct(compound);
                 for (auto &repset_tuple: tuples) {
                     ItemSet newitemset;
+
+                    /*if (repstate.items.size() == 0) {
+                        continue;
+                    }*/
 
                     for (auto &rule: getRules(op)) {
                         int cost = rule->cost;
@@ -827,11 +835,31 @@ struct ISelGenerator {
                     newitemset.dump(std::cout);
 
                     int idx = 0;
-                    std::cout << "+(";
+                    switch (op) {
+                        case None:
+                            break;
+                        case Add:
+                            std::cout << "+";
+                            break;
+                        case Sub:
+                            std::cout << "-";
+                            break;
+                        case Assign:
+                            std::cout << "=";
+                            break;
+                        case Const:
+                            break;
+                        case Reg:
+                            break;
+                    }
+                    std::cout << "(";
+                    std::vector<int> transition;
                     for (auto &t: repset_tuple) {
+                        transition.push_back(findState(op, i, t));
                         auto f = findState(op, i, t);
                         std::cout << f << " ";
                     }
+                    theta[op][transition] = states_index[newitemset];
                     std::cout << ")" << " -> " << states_index[newitemset] << std::endl;
                     std::cout << std::endl;
 
@@ -911,9 +939,81 @@ struct ISelGenerator {
 
 };
 
+struct TreeNode {
+    int label = 0;
+    Opcode op;
+    std::vector<TreeNode *> members;
+
+    TreeNode(Opcode op) : op(op) {}
+
+    TreeNode(const std::vector<TreeNode *> &members) : members(members) {}
+
+    TreeNode(Opcode op, const std::vector<TreeNode *> &members) : op(op), members(members) {}
+
+    void dump(std::ostream &os, int indent = 0) {
+        os << std::string(indent * 4, ' ');
+        switch (op) {
+            case None:
+                break;
+            case Add:
+                os << "+";
+                break;
+            case Sub:
+                os << "-";
+                break;
+            case Assign:
+                os << "=";
+                break;
+            case Const:
+                os << "Int";
+                break;
+            case Reg:
+                os << "Reg";
+                break;
+        }
+
+        os << " (" << label << ")";
+
+        if (members.size()) {
+            os << std::endl << std::string(indent * 4, ' ') << " {" << std::endl;
+            for (auto &mem: members) {
+                mem->dump(os, indent + 1);
+            }
+
+            os << std::string(indent * 4, ' ') << "}";
+        }
+
+        os << std::endl;
+
+    }
+
+};
+
+void automata_label(TransMap &theta, TransSym &tau, TreeNode *node) {
+    if (node->members.size()) {
+        std::vector<int> tran;
+        for (auto &mem: node->members) {
+            automata_label(theta, tau, mem);
+            tran.push_back(mem->label);
+        }
+        node->label = theta[node->op][tran];
+
+    } else {
+        node->label = tau[node->op];
+    }
+
+
+}
+
 int main() {
     ISelGenerator gen;
     gen.WorklistMain();
+
+    auto *node = new TreeNode(Add, {new TreeNode(Sub, {new TreeNode(Reg), new TreeNode(Const)}), new TreeNode(Reg)});
+
+    automata_label(gen.theta, gen.tau, node);
+
+    node->dump(std::cout);
     //gen.IterativeMain();
 
 
