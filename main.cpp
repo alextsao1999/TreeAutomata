@@ -21,7 +21,7 @@ enum Opcode {
 std::string getOpName(Opcode op) {
     switch (op) {
         case None:
-            return "None";
+            return "";
         case Add:
             return "+";
         case Sub:
@@ -70,17 +70,7 @@ struct Symbol {
     }
 
     void dump(std::ostream &os) {
-        switch (opcode) {
-            case None:
-                os << name;
-                break;
-            case Const:
-                os << "Int";
-                break;
-            case Reg:
-                os << "Reg";
-                break;
-        }
+        os << (opcode == None ? name : getOpName(opcode));
     }
 
 };
@@ -250,7 +240,6 @@ struct ISelGenerator {
     std::vector<Symbol *> nonterminals;
     std::vector<std::unique_ptr<Rule>> rules;
     std::vector<ItemSet> worklist;
-    //std::set<ItemSet> states;
     std::map<ItemSet, int> states;
     int index = 0;
     std::set<Opcode> OP;
@@ -398,6 +387,22 @@ struct ISelGenerator {
         return res;
     }
 
+    void closure(ItemSet &itemset) {
+        bool changed;
+        do {
+            changed = false;
+            for (auto &rule : rules) {
+                auto *RHS = rule->getArityZeroRHS();
+                if (itemset.items.contains(RHS)) { // is chain rule
+                    int cost = rule->cost + itemset.getCost(RHS);
+                    if (itemset.add(rule->getNonterminal(), rule.get(), cost)) {
+                        changed = true;
+                    }
+                }
+            }
+        } while (changed);
+    }
+
     void WorklistArityZeroTables() {
         for (auto &a: terminals) {
             ItemSet itemset;
@@ -405,33 +410,16 @@ struct ISelGenerator {
                 itemset.add(rule->getNonterminal(), rule, rule->cost);
             }
 
-            auto min = itemset.getMinCost();
-            for (auto &[sym, tuple] : itemset.items) {
-                tuple.second = tuple.second - min;
-            }
+            itemset.deltaCost();
 
-            bool changed;
-            do {
-                changed = false;
-                for (auto &rule : rules) {
-                    auto *RHS = rule->getArityZeroRHS();
-                    if (itemset.items.contains(RHS)) { // is chain rule
-                        int cost = rule->cost + itemset.items[RHS].second;
-
-                        if (itemset.add(rule->getNonterminal(), rule.get(), cost)) {
-                            changed = true;
-                        }
-                    }
-                }
-            } while (changed);
+            closure(itemset);
 
             addState(itemset);
-
             tau[a->opcode] = states[itemset];
+
             std::cout << "[newstate: " << states[itemset] << "] -> " ;
             a->dump(std::cout);
             std::cout << std::endl;
-
             itemset.dump(std::cout);
         }
     }
@@ -509,18 +497,7 @@ struct ISelGenerator {
                     newitemset.deltaCost();
 
                     if (!hasState(newitemset)) {
-                        bool changed;
-                        do {
-                            changed = false;
-                            for (auto &rule: getRules(op)) {
-                                if (newitemset.contains(rule->getArityZeroRHS())) {
-                                    int cost = rule->cost + newitemset.getCost(rule->getArityZeroRHS());
-                                    if (newitemset.add(rule->getNonterminal(), rule, cost)) {
-                                        changed = true;
-                                    }
-                                }
-                            }
-                        } while (changed);
+                        closure(newitemset);
                     }
 
                     if (newitemset.items.empty()) {
@@ -569,11 +546,8 @@ struct ISelGenerator {
     void addState(const ItemSet &itemset) {
         if (!states.contains(itemset)) {
             states[itemset] = ++index;
+            worklist.push_back(itemset);
         }
-        if (worklist.size() > 0 && worklist.back().items == itemset.items) {
-            return;
-        }
-        worklist.push_back(itemset);
     }
 
     void WorklistMain() {
@@ -647,17 +621,26 @@ struct TreeNode {
 
 void automata_label(ISelGenerator &gen, TreeNode *node) {
     if (node->members.size()) {
-        std::vector<int> tran;
+        std::vector<int> transition;
         for (auto &mem: node->members) {
             automata_label(gen, mem);
-            tran.push_back(mem->label);
+            transition.push_back(mem->label);
         }
-        node->label = gen.theta[node->op][tran];
+        node->label = gen.theta[node->op][transition];
 
     } else {
         node->label = gen.tau[node->op];
     }
 
+}
+
+template<typename K, typename V>
+auto swap_mapkv(std::map<K, V> &map) {
+    std::map<V, K> res;
+    for (auto &[k, v]: map) {
+        res[v] = k;
+    }
+    return res;
 }
 
 int main() {
@@ -666,7 +649,9 @@ int main() {
     std::cout << std::endl << std::endl;
 
     std::cout << "=======================================" << std::endl;
-    for (auto &[itemset, id]: gen.states) {
+    std::map<int, ItemSet> states;
+    states = swap_mapkv(gen.states);
+    for (auto &[id, itemset]: states) {
         std::cout << id << " -> ";
         itemset.dump(std::cout);
     }
