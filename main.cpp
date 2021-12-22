@@ -273,8 +273,8 @@ struct ISelGenerator {
         rules.emplace_back(new Rule{reg, {Reg_t}, 1});
         rules.emplace_back(new Rule{cons, {Cons_t}, 1});
         rules.emplace_back(new Rule{reg, {cons}, 1});
-        //rules.emplace_back(new Rule{reg, Sub, {reg, cons}, 2});
-        // rules.emplace_back(new Rule{reg, Sub, {reg, reg}, 2});
+        rules.emplace_back(new Rule{reg, Sub, {reg, cons}, 2});
+        rules.emplace_back(new Rule{reg, Sub, {reg, reg}, 2});
         rules.emplace_back(new Rule{reg, Add, {reg, cons}, 2});
         rules.emplace_back(new Rule{reg, Add, {reg, reg}, 2});
         rules.emplace_back(new Rule{addr, Add, {reg, cons}, 0});
@@ -440,11 +440,13 @@ struct ISelGenerator {
             }
 
             std::cout << "i = " << i << std::endl;
-            std::cout << "reps:" << std::endl;
+
+            // 打印当前的表示集
+            /*std::cout << "reps:" << std::endl;
             for (auto &ss: I[op][i]) {
                 std::cout << findState(op, i, ss) << " -> ";
                 ss.dump(std::cout);
-            }
+            }*/
 
             if (repstate.items.empty()) {
                 continue;
@@ -488,9 +490,9 @@ struct ISelGenerator {
                                 cost += repset_tuple[j].getCost(rule->rhs[j]);
                             }
                         }
-                        std::cout << "adding rule ";
+                        /*std::cout << "adding rule ";
                         rule->dump(std::cout);
-                        std::cout << ", " << cost << std::endl;
+                        std::cout << ", " << cost << std::endl;*/
                         if (exist)
                             newitemset.add(rule->getNonterminal(), rule, cost);
                     }
@@ -659,7 +661,7 @@ int main() {
 
     std::vector<TreeNode *> nodes = {
             new TreeNode(Assign, {new TreeNode(Add, {new TreeNode(Reg), new TreeNode(Const)}), new TreeNode(Reg)}),
-            new TreeNode(Add, {new TreeNode(Add, {new TreeNode(Reg), new TreeNode(Const)}), new TreeNode(Reg)}),
+            new TreeNode(Add, {new TreeNode(Sub, {new TreeNode(Reg), new TreeNode(Const)}), new TreeNode(Reg)}),
             new TreeNode(Add, {new TreeNode(Reg), new TreeNode(Reg)}),
             new TreeNode(Add, {new TreeNode(Reg), new TreeNode(Const)}),
     };
